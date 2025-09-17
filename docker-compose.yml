@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: hotel_booking_postgres
+    environment:
+      POSTGRES_DB: hotel_booking_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - hotel_booking_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d hotel_booking_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: hotel_booking_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - hotel_booking_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Keycloak for OAuth2
+  keycloak:
+    image: quay.io/keycloak/keycloak:22.0
+    container_name: hotel_booking_keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin123
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak_db
+      KC_DB_USERNAME: user
+      KC_DB_PASSWORD: password
+      KC_HOSTNAME: localhost
+      KC_HTTP_ENABLED: true
+    ports:
+      - "8080:8080"
+    networks:
+      - hotel_booking_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: start-dev
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+
+  # FastAPI Application
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: hotel_booking_app
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/hotel_booking_db
+      REDIS_URL: redis://redis:6379
+      KEYCLOAK_SERVER_URL: http://keycloak:8080
+      ENVIRONMENT: production
+      CREATE_INITIAL_DATA: true
+    ports:
+      - "8000:8000"
+    networks:
+      - hotel_booking_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    entrypoint: ["./docker/entrypoint.sh"]
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hotel_booking_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - hotel_booking_network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hotel_booking_grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning
+    networks:
+      - hotel_booking_network
+    depends_on:
+      - prometheus
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: hotel_booking_jaeger
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+      - "6831:6831/udp"
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    networks:
+      - hotel_booking_network
+
+networks:
+  hotel_booking_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  keycloak_data:
+  prometheus_data:
+  grafana_data:

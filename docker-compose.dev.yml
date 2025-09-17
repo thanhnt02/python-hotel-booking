@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: hotel_booking_postgres_dev
+    environment:
+      POSTGRES_DB: hotel_booking_dev_db
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - hotel_booking_dev_network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: hotel_booking_redis_dev
+    ports:
+      - "6380:6379"
+    networks:
+      - hotel_booking_dev_network
+
+  # FastAPI Application (Development)
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: hotel_booking_app_dev
+    environment:
+      DATABASE_URL: postgresql://dev_user:dev_password@postgres:5432/hotel_booking_dev_db
+      REDIS_URL: redis://redis:6379
+      ENVIRONMENT: development
+      DEBUG: true
+    ports:
+      - "8001:8000"
+    networks:
+      - hotel_booking_dev_network
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - .:/app
+      - /app/__pycache__
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+networks:
+  hotel_booking_dev_network:
+    driver: bridge
+
+volumes:
+  postgres_dev_data:
